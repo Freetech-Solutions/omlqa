@@ -1,92 +1,112 @@
-# OMniLeads QA 
+# OMniLeads QA tools
 
+En este repositorio contamos con tres componentes utiles para testear una instancia de OMniLeads:
 
+* Nginx CGI: para servir algunas acciones que selenium necesita disparar sobre el entorno.
+* PSTN emulator: para simular la interaccion con la PSTN en todos los tipos de llamadas que comprueban los tests.
+* Web calls & video calls: para poder generar llamadas de audio y/o video desde un browser hacia una campaña de OMniLeads.
 
-## Getting started
+## Deploy con docker-compose
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+Antes de levantar el stack ,debemos asegurarnos de que ya tenemos corriendo OMniLeads desde su docker-compose con su entorno de pruebas arriba (oml_manage --init_env). 
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+Es posible lanzar los tres componentes mediante un stack docker-compose.yml
+Si así es entonces podemos lanzar:
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/omnileads/omlqa.git
-git branch -M main
-git push -uf origin main
+cp env .env
+docker-compose up -d
 ```
 
-## Integrate with your tools
+Donde se deberá ajustar el archivo de variables .env de acuerdo a los valores de la instancia de OMniLeads a interactuar.
 
-- [ ] [Set up project integrations](https://gitlab.com/omnileads/omlqa/-/settings/integrations)
+## Nginx CGI
 
-## Collaborate with your team
+### Build
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Automatically merge when pipeline succeeds](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+```
+cd nginxqa/
+docker buildx build --file=Dockerfile --tag=$REPOSITORY/nginxqa:$TAG --target=run .
+```
 
-## Test and Deploy
+### Deploy
 
-Use the built-in continuous integration in GitLab.
+```
+docker run -d \
+  --name omlqa-nginxqa \
+  --hostname nginxqa \
+  --dns=8.8.8.8 \
+  --env PGHOST="${PGHOST}" \
+  --env PGPASSWORD="${PGPASSWORD}" \
+  --env PSTN_HOSTNAME="${PSTN_HOSTNAME}" \
+  -p 8888:8888 \
+  --privileged \
+  --restart on-failure \
+  -it \
+  --stop-timeout 90 \
+  omnileads/nginxqa:latest
+```
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+Para comprobar se puede ingresar al puerto 8888 y probar las opciones.
 
-***
+## PSTN Emulator
 
-# Editing this README
+Este componente nos permite simular una troncal SIP de proveedor de terminación telefónica, de manera tal que la instancia de OMniLeads podrá ser testeada en su totalidad pudiendo enviar y recibir llamadas.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
+Tanto en el DevEnv como en el Docker-Compose nuestro componente es lanzado como container por el docker-compose.yml de cada escenario. Ademas se cuenta con el comando de inicialización de entorno que al ser invocado entre otras cosas, deja establecido un trunk entre OML y PSTN-Emulator listo para comenzar a cursar llamadas.
 
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
 
-## Name
-Choose a self-explaining name for your project.
+### Build
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+```
+cd pstn_emulator/
+docker build --tag=your_tag .
+```
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+### Deploy
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+```
+docker run \
+  -p 6060:6060/udp \
+  -p 10000-10020:10000-10020/udp \
+  docker.io/omnileads/pstn_emulator:$tag_version
+```
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+## WebRTC phone & video caller 
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+Este componente implementa un cliente WebRTC que permite generar llamadas y video llamadas a través de la canalidad WebRCT de OMniLeads. 
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+### Build 
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+```
+cd web_video_calls
+docker build --tag=your_tag .
+```
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+### Deploy
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+Para lanzar un cliente que consume la canalidad de video permitiendo generar video-llamadas hacia OMniLeads, se debe invocar el comando:
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+```
+docker run \
+  --name=oml-videocalls-widget \
+  --dns=8.8.8.8 \
+  --env=CLIENT_USERNAME=your_omnileads_username \
+  --env=CLIENT_PASSWORD=your_omnileads_user_password \
+  --env=KAMAILIO_HOST=localhost \
+  --env=OML_HOST=omnileads_hostname.com \
+  --env=WEBSOCKET_PORT=443 \
+  --publish=8889:5000 \
+  --privileged \
+  --restart=on-failure \
+  --tty \
+  docker.io/omnileads/videocalls_widget:240224.01
+```
 
-## License
-For open source projects, say how it is licensed.
+Se debe considerar que si estamos frente a una instancia AIO el valor de KAMAILIO_HOST debe ser "localhost", mientras que si la instancia es del tipo cluster el valor de KAMAILIO_HOST debe ser igual a la dirección IP privada de la instancia APP del cluster.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Una vez que el contenedor es lanzado sin errores, se accede a la dirección del host donde fue lanzado: https://host_video_calls.com y desde allí puede lanzar llamadas de video utilizando el botón correspondiente. Esta acción va a lanzar una llamada hacia la instancia de OMniLeads configurada "OML_HOST", puntualmente sobre el DID: 01177660011, por lo que deberá contar con un DID con ese número apuntando a una campaña entrante con la canalidad de video habilitada. 
+
+
+
