@@ -1,0 +1,22 @@
+version: '3.7'
+
+services:
+
+  nginxcgi:
+    container_name: oml-nginx-cgi
+    hostname: nginxcgi
+    dns: 8.8.8.8
+    image: omnileads/nginxcgi:latest
+    networks:
+      - prodenv_omnileads
+    ports:
+      - 8081:80
+    privileged: true
+    restart: on-failure
+    stdin_open: true
+    stop_grace_period: 1m30s
+    tty: true
+
+networks:
+  prodenv_omnileads:
+    external: true
