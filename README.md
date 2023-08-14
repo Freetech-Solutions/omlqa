@@ -4,18 +4,46 @@
 
 En este repositorio contamos con dos componentes implicados en las acciones de QA:
 
+* Nginx CGI: para servir algunas acciones que selenium necesita disparar sobre el entorno.
+* PSTN emulator: para simular la interaccion con la PSTN en todos los tipos de llamadas que comprueban los tests.
+
 ## Ejecutar entorno
 
 Antes de levantar el stack ,debemos asegurarnos de que ya tenemos corriendo OMniLeads desde su docker-compose con su entorno de pruebas arriba (oml_manage --init_env). 
 Si así es entonces podemos lanzar:
 
 ```
+docker run -d \
+  --name oml-nginx-cgi \
+  --hostname nginxcgi \
+  --dns 8.8.8.8 \
+  -e PGHOST=${PGHOST} \
+  -e PGPASSWORD=${PGPASSWORD} \
+  -e PSTN_HOSTNAME=${PSTN_HOSTNAME} \
+  --network oml_omnileads \
+  -p 8888:8888 \
+  --privileged \
+  --restart on-failure \
+  --stop-timeout 90 \
+  -i -t \
+  omnileads/nginxqa:latest
+```
+
+Si deseas usar docker-compose:
+
+```
 docker-compose up -d
 ```
 
-Para comprobar se puede ingresar al puerto 8081 y probar las opciones. Es más interesante si lo hacemos contando con un usuario logueado como agente.
+Para comprobar se puede ingresar al puerto 8888 y probar las opciones. Es más interesante si lo hacemos contando con un usuario logueado como agente.
 
 ## Build
+
+Run:
+
+```
+docker buildx build --file=Dockerfile --tag=$REPOSITORY/nginxqa:$TAG --target=run .
+```
 
 ### Pstn Emulator
 

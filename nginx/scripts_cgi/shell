@@ -1,0 +1,13 @@
+#!/bin/bash
+
+echo -e "Content-type:text/html\r\n"
+echo -e "\r\n"
+echo -e "<html><head>"
+echo -e "<title>Shell CGI</title>"
+echo -e "</head><body><pre>"
+echo -e "<h1><center>SHELL CGI</center></h1>"
+echo -e "<h2>Hostname: $(cat /etc/hosts | grep "$HOSTNAME") </h2>"
+echo -e "<h2>Date:</h2> $(date)"
+echo -e "<h2>Kernel and arch: </h2> $(uname -a)"
+echo "</pre></body></html>"
+echo -e "\r\n"
