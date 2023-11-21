@@ -58,6 +58,22 @@ cd pstn_emulator
 docker build --tag=your_tag .
 ```
 
+Docker run:
+
+docker run \
+  -p 6060:6060/udp \
+  -p 10000-10020:10000-10020/udp \
+  --network=host \
+  docker.io/omnileads/pstn_emulator:latest
+
+
+podman run \
+  -p 6060:6060/udp \
+  -p 10000-10020:10000-10020/udp \
+  --network=host \
+  docker.io/omnileads/pstn_emulator:latest
+
+
 ### Nginx CGI scripts
 
 Este container implementa CGI para poder disparar algunas acciones sobre la instancia de OMniLeads a partir de solicitudes HTTP. Principalmente utilizado por Selenium IDE.

@@ -20,7 +20,7 @@ EOF
 }
 
 # Ejecuta el comando sipp redirigiendo su salida a /dev/null
-sipp -sn uac ${PSTN_HOSTNAME}:5060 -s stress -m 1 -r 1 -d 60000 -l 1 > /dev/null 2>&1
+sipp -sn uac ${PSTN_HOSTNAME}:5070 -s stress -m 1 -r 1 -d 60000 -l 1 > /dev/null 2>&1
 result=$?
 
 if [ $result -eq 0 ] || [ $result -eq 1 ] || [ $result -eq 97 ]; then
