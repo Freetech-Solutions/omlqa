@@ -3,14 +3,36 @@ version: '3.7'
 services:
 
   nginxcgi:
-    container_name: oml-nginx-cgi
+    container_name: omlqa-nginx
     hostname: nginxcgi
     dns: 8.8.8.8
-    image: omnileads/nginxcgi:latest
-    networks:
-      - prodenv_omnileads
+    image: omnileads/nginxqa:latest
+    environment:
+      - PGHOST=${PGHOST}
+      - PGPASSWORD=${PGPASSWORD}
+      - PSTN_HOSTNAME=${PSTN_HOSTNAME}
+    networks: 
+      - oml_omnileads
     ports:
-      - 8081:80
+      - 8888:8888
+    privileged: true
+    restart: on-failure
+    stdin_open: true
+    stop_grace_period: 1m30s
+    tty: true
+    #volumes:
+    #  - ./scripts_cgi:/usr/share/nginx/html/
+
+  pbxemulator:
+    container_name: omlqa-pstn
+    hostname: pbxemulator
+    dns: 8.8.8.8
+    image: omnileads/pstn_emulator:latest
+    networks:
+      - oml_omnileads
+    ports:
+      - 6060:5060/udp
+      - 10000-10020:10000-10020/udp
     privileged: true
     restart: on-failure
     stdin_open: true
@@ -18,5 +40,5 @@ services:
     tty: true
 
 networks:
-  prodenv_omnileads:
+  oml_omnileads:
     external: true
