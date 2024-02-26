@@ -1,0 +1,7 @@
+PGHOST=omnileads_hostname
+PGPASSWORD=dsfsfds677987ddas
+PSTN_HOSTNAME=omnileads_hostname
+VIDEO_CALL_WEB_USERNAME=webphone_user
+VIDEO_CALL_WEB_USER_PASSWORD=webphone_pass
+KAMAILIO_HOST=localhost
+OML_FQDN=omnileads_hostname
