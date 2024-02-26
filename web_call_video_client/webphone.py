@@ -37,7 +37,7 @@ def index():
         'index.html',
         sip_user=sip_user,
         sip_password=sip_password,
-        video_domain=video_domain,  # Corregido: Coma añadida
+        video_domain=video_domain,
         kamailio_host=kamailio_host,
         websocket_port=websocket_port,
         websocket_host=websocket_host

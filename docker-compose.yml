@@ -37,7 +37,7 @@ services:
     tty: true
 
   oml-videocalls-widget:
-    image: docker.io/omnileads/videocalls_widget:240224.01
+    image: docker.io/omnileads/videocalls_widget:240226.01
     container_name: oml-videocalls-widget
     dns:
       - 8.8.8.8
