@@ -1,0 +1,115 @@
+<!-- Copyright (C) 2018 Freetech Solutions -->
+
+<!DOCTYPE html>
+<html lang='es'>
+<head>
+    <meta charset="utf-8">
+    <title>MiniPhone</title>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+	<script type="text/javascript" src="{{ url_for('static', filename='js/jquery-3.3.1.slim.min.js') }}"></script>
+	<script type="text/javascript" src="{{ url_for('static', filename='js/state-machine-min.js') }}" ></script>
+	<script type="text/javascript" src="{{ url_for('static', filename='js/jssip.js') }}" ></script>
+
+	<script type="text/javascript" src="{{ url_for('static', filename='js/mustache-3.0.2.min.js') }}" ></script>
+  <script type="text/javascript" src="{{ url_for('static', filename='js/phoneJsTemplate.js') }}" ></script>
+  <script type="text/javascript" src="{{ url_for('static', filename='js/phoneJsFSM.js') }}" ></script>
+	<script type="text/javascript" src="{{ url_for('static', filename='js/phoneJsView.js') }}" ></script>
+	<script type="text/javascript" src="{{ url_for('static', filename='js/miniPhoneJs.js') }}"></script>
+  <script type="text/javascript" src="{{ url_for('static', filename='js/phoneJsController.js') }}"></script>
+  <script type="text/javascript" src="{{ url_for('static', filename='js/jitsi_external_api.js') }}"></script>
+
+<script type="text/javascript">
+ var phone_controller = undefined;
+ var miniPhoneConfig = {
+   'sip_user': "{{ sip_user }}",
+   'sip_password': "{{ sip_password }}",
+   'KamailioHost': "{{ kamailio_host }}",
+   'WebSocketPort': "{{ websocket_port }}",
+   'WebSocketHost': "{{ websocket_host }}",
+   'container_id': 'webphone-container',
+   'container_class': 'webphone-body',
+   'webphone_keys_id': 'webphone_keys',
+   'phone_key_pad_id': 'phone_key_pad',
+   'phone_actions_id': 'phone_actions',
+   'non_phone_actions_id': 'non_phone_actions',
+   'footer_img_id': 'footer_img_id',
+   'video_container_id': 'video_container_id',
+   'reload_video_id': 'reload_video_id',
+   'images': {
+     'video_green': '{{ url_for("static", filename="img/video_green.png") }}',
+     'phone_green': '{{ url_for("static", filename="img/phone_green.png") }}',
+     'phone_red': '{{ url_for("static", filename="img/phone_red.png") }}',
+     'powered_by': '{{ url_for("static", filename="img/powered_by.png") }}',
+     'numpad': '{{ url_for("static", filename="img/numpad.png") }}',
+     'reload_video': '{{ url_for("static", filename="img/reload_green.png") }}',
+   },
+   'buttons_class': 'key_pad_button',
+   'show_keypad_button_id': 'show_key_pad',
+   'destinations': [
+     {'phone': '01155001121', 'name': 'Sales', 'index': '0'},
+     {'phone': '01177660011', 'name': 'Help Desk', 'index': '1'},
+     {'phone': '01177660012', 'name': 'Suggestions', 'index': '2'},
+     {'phone': '01177660011', 'name': 'Phone Call', 'index': '3'},
+   ],
+   'video_channels': [
+     {'phone': '01177660011', 'name': 'Video Call', 'index': '1'},
+   ],
+   'audios': [
+     {'id': 'remoteAudio', 'autoplay': 'autoplay', 'muted': '', 'name': 'remote'},
+     {'id': 'localAudio', 'autoplay': '', 'muted': 'muted', 'name': 'local'},
+   ],
+   'key_pad_buttons' : [
+     {
+       'div': [
+         {'button_label': '1', 'button_value': '1'},
+         {'button_label': '2', 'button_value': '2'},
+         {'button_label': '3', 'button_value': '3'},
+       ],
+     },
+     {
+       'div': [
+         {'button_label': '4', 'button_value': '4'},
+         {'button_label': '5', 'button_value': '5'},
+         {'button_label': '6', 'button_value': '6'},
+       ],
+     },
+     {
+       'div': [
+         {'button_label': '7', 'button_value': '7'},
+         {'button_label': '8', 'button_value': '8'},
+         {'button_label': '9', 'button_value': '9'},
+       ],
+     },
+     {
+       'div': [
+         {'button_label': 'asterisk', 'button_value': '*'},
+         {'button_label': '0', 'button_value': '0'},
+         {'button_label': 'hashtag', 'button_value': '#'},
+       ],
+     },
+   ],
+   'extra_headers': [
+     'OML-client: 110022993388',
+     'X-Bar: bar',
+   ],
+
+   'video': {
+    'domain': '{{video_domain}}',
+    'width': 640,
+    'height': 480,
+   }
+ };
+
+jQuery(document).ready(function() {
+  phone_controller = new PhoneJSController(miniPhoneConfig);
+});
+</script>
+
+</head>
+
+<body>
+  <div id="webphone-container" class="webphone-body"></div>
+</body>
+
+</html>
