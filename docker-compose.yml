@@ -12,24 +12,21 @@ services:
       - PGPASSWORD=${PGPASSWORD}
       - PSTN_HOSTNAME=${PSTN_HOSTNAME}
     networks: 
-      - oml_omnileads
+      - oml_qa
     ports:
-      - 8888:8888
+      - 8887:8888
     privileged: true
     restart: on-failure
     stdin_open: true
     stop_grace_period: 1m30s
     tty: true
-    #volumes:
-    #  - ./scripts_cgi:/usr/share/nginx/html/
 
   pbxemulator:
     container_name: omlqa-pstn
     hostname: pbxemulator
     dns: 8.8.8.8
-    image: omnileads/pstn_emulator:latest
-    networks:
-      - oml_omnileads
+    image: omnileads/pstn_emulator:231212.01
+    network_mode: host
     ports:
       - 6060:5060/udp
       - 10000-10020:10000-10020/udp
@@ -39,6 +36,23 @@ services:
     stop_grace_period: 1m30s
     tty: true
 
+  oml-videocalls-widget:
+    image: docker.io/omnileads/videocalls_widget:240224.01
+    container_name: oml-videocalls-widget
+    dns:
+      - 8.8.8.8
+    environment:
+      CLIENT_USERNAME: ${VIDEO_CALL_WEB_USERNAME}
+      CLIENT_PASSWORD: ${VIDEO_CALL_WEB_USER_PASSWORD}
+      KAMAILIO_HOST: ${KAMAILIO_HOST}
+      OML_HOST: ${OML_FQDN}
+      WEBSOCKET_PORT: 443
+    ports:
+      - "8889:5000"
+    privileged: true
+    restart: on-failure
+    tty: true
+
 networks:
-  oml_omnileads:
-    external: true
+  oml_qa:
+    
