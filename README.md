@@ -1,23 +1,26 @@
-# OMniLeads QA
+# OMniLeads QA tools
 
 ## Getting started
 
-En este repositorio contamos con dos componentes implicados en las acciones de QA:
+En este repositorio contamos con tres componentes utiles para testear una instancia de OMniLeads:
 
 * Nginx CGI: para servir algunas acciones que selenium necesita disparar sobre el entorno.
 * PSTN emulator: para simular la interaccion con la PSTN en todos los tipos de llamadas que comprueban los tests.
 * Web calls & video calls: para poder generar llamadas de audio y/o video desde un browser hacia una campaña de OMniLeads.
 
-## Ejecutar entorno
+## Deploy con docker-compose
 
 Antes de levantar el stack ,debemos asegurarnos de que ya tenemos corriendo OMniLeads desde su docker-compose con su entorno de pruebas arriba (oml_manage --init_env). 
 
+Es posible lanzar los tres componentes mediante un stack docker-compose.yml
 Si así es entonces podemos lanzar:
 
 ```
 cp env .env
 docker-compose up -d
 ```
+
+Donde se deberá ajustar el archivo de variables .env de acuerdo a los valores de la instancia de OMniLeads a interactuar.
 
 ## Nginx CGI
 
@@ -74,6 +77,7 @@ docker run \
 
 ### WebRTC phone & video caller 
 
+Este componente implementa un cliente WebRTC que permite generar llamadas y video llamadas a través de la canalidad WebRCT de OMniLeads. 
 
 ### Build 
 
