@@ -1,7 +1,5 @@
 # OMniLeads QA tools
 
-## Getting started
-
 En este repositorio contamos con tres componentes utiles para testear una instancia de OMniLeads:
 
 * Nginx CGI: para servir algunas acciones que selenium necesita disparar sobre el entorno.
@@ -51,8 +49,7 @@ docker run -d \
 
 Para comprobar se puede ingresar al puerto 8888 y probar las opciones.
 
-
-## Pstn Emulator
+## PSTN Emulator
 
 Este componente nos permite simular una troncal SIP de proveedor de terminación telefónica, de manera tal que la instancia de OMniLeads podrá ser testeada en su totalidad pudiendo enviar y recibir llamadas.
 
@@ -75,7 +72,7 @@ docker run \
   docker.io/omnileads/pstn_emulator:$tag_version
 ```
 
-### WebRTC phone & video caller 
+## WebRTC phone & video caller 
 
 Este componente implementa un cliente WebRTC que permite generar llamadas y video llamadas a través de la canalidad WebRCT de OMniLeads. 
 
