@@ -1,93 +1,93 @@
-# OMniLeads QA
+# OMniLeads QA tools
 
 ## Getting started
 
-En este repositorio contamos con dos componentes implicados en las acciones de QA:
+En este repositorio contamos con tres componentes utiles para testear una instancia de OMniLeads:
 
 * Nginx CGI: para servir algunas acciones que selenium necesita disparar sobre el entorno.
 * PSTN emulator: para simular la interaccion con la PSTN en todos los tipos de llamadas que comprueban los tests.
+* Web calls & video calls: para poder generar llamadas de audio y/o video desde un browser hacia una campaña de OMniLeads.
 
-## Ejecutar entorno
+## Deploy con docker-compose
 
 Antes de levantar el stack ,debemos asegurarnos de que ya tenemos corriendo OMniLeads desde su docker-compose con su entorno de pruebas arriba (oml_manage --init_env). 
+
+Es posible lanzar los tres componentes mediante un stack docker-compose.yml
 Si así es entonces podemos lanzar:
 
 ```
-docker run -d \
-  --name oml-nginx-cgi \
-  --hostname nginxcgi \
-  --dns 8.8.8.8 \
-  -e PGHOST=${PGHOST} \
-  -e PGPASSWORD=${PGPASSWORD} \
-  -e PSTN_HOSTNAME=${PSTN_HOSTNAME} \
-  --network oml_omnileads \
-  -p 8888:8888 \
-  --privileged \
-  --restart on-failure \
-  --stop-timeout 90 \
-  -i -t \
-  omnileads/nginxqa:latest
-```
-
-Si deseas usar docker-compose:
-
-```
+cp env .env
 docker-compose up -d
 ```
 
-Para comprobar se puede ingresar al puerto 8888 y probar las opciones. Es más interesante si lo hacemos contando con un usuario logueado como agente.
+Donde se deberá ajustar el archivo de variables .env de acuerdo a los valores de la instancia de OMniLeads a interactuar.
 
-## Build
+## Nginx CGI
 
-Run:
+### Build
 
 ```
+cd nginxqa/
 docker buildx build --file=Dockerfile --tag=$REPOSITORY/nginxqa:$TAG --target=run .
 ```
 
-### Pstn Emulator
+### Deploy
+
+```
+docker run -d \
+  --name omlqa-nginxqa \
+  --hostname nginxqa \
+  --dns=8.8.8.8 \
+  --env PGHOST="${PGHOST}" \
+  --env PGPASSWORD="${PGPASSWORD}" \
+  --env PSTN_HOSTNAME="${PSTN_HOSTNAME}" \
+  -p 8888:8888 \
+  --privileged \
+  --restart on-failure \
+  -it \
+  --stop-timeout 90 \
+  omnileads/nginxqa:latest
+```
+
+Para comprobar se puede ingresar al puerto 8888 y probar las opciones.
+
+
+## Pstn Emulator
 
 Este componente nos permite simular una troncal SIP de proveedor de terminación telefónica, de manera tal que la instancia de OMniLeads podrá ser testeada en su totalidad pudiendo enviar y recibir llamadas.
 
 Tanto en el DevEnv como en el Docker-Compose nuestro componente es lanzado como container por el docker-compose.yml de cada escenario. Ademas se cuenta con el comando de inicialización de entorno que al ser invocado entre otras cosas, deja establecido un trunk entre OML y PSTN-Emulator listo para comenzar a cursar llamadas.
 
-Para construir la imagen del pstn_emulator:
+
+### Build
 
 ```
-cd pstn_emulator
+cd pstn_emulator/
 docker build --tag=your_tag .
 ```
 
-Docker run:
+### Deploy
 
+```
 docker run \
   -p 6060:6060/udp \
   -p 10000-10020:10000-10020/udp \
-  --network=host \
-  docker.io/omnileads/pstn_emulator:latest
+  docker.io/omnileads/pstn_emulator:$tag_version
+```
 
+### WebRTC phone & video caller 
 
-podman run \
-  -p 6060:6060/udp \
-  -p 10000-10020:10000-10020/udp \
-  --network=host \
-  docker.io/omnileads/pstn_emulator:latest
+Este componente implementa un cliente WebRTC que permite generar llamadas y video llamadas a través de la canalidad WebRCT de OMniLeads. 
 
+### Build 
 
-### Nginx CGI scripts
-
-Este container implementa CGI para poder disparar algunas acciones sobre la instancia de OMniLeads a partir de solicitudes HTTP. Principalmente utilizado por Selenium IDE.
-
-
-Para construir la imagen de Nginx cgi:
 
 ```
-cd nginxcgi
+cd web_video_calls
 docker build --tag=your_tag .
 ```
 
-
-### WebRTC phone & video caller 
+### Deploy
 
 Para lanzar un cliente que consume la canalidad de video permitiendo generar video-llamadas hacia OMniLeads, se debe invocar el comando:
 
@@ -112,9 +112,4 @@ Se debe considerar que si estamos frente a una instancia AIO el valor de KAMAILI
 Una vez que el contenedor es lanzado sin errores, se accede a la dirección del host donde fue lanzado: https://host_video_calls.com y desde allí puede lanzar llamadas de video utilizando el botón correspondiente. Esta acción va a lanzar una llamada hacia la instancia de OMniLeads configurada "OML_HOST", puntualmente sobre el DID: 01177660011, por lo que deberá contar con un DID con ese número apuntando a una campaña entrante con la canalidad de video habilitada. 
 
 
-Para construir la imagen de WebRTC video caller:
 
-```
-cd web_video_calls
-docker build --tag=your_tag .
-```
