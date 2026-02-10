@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  e2e-tests:
+    build: .
+    volumes:
+      - ./tests:/app/tests  # Mapeamos para editar sin reconstruir
+      - ./reportes:/app/reportes # Para sacar videos o screenshots si falla
+    ipc: host # Importante para evitar crashes de Chrome por memoria compartida
+    environment:
+      - BASE_URL=https://tu-webphone-url.com
