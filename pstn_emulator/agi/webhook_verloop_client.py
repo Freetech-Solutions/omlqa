@@ -5,10 +5,10 @@ Script AGI para enviar webhook a Verloop con parámetros personalizados.
 Este script recibe los argumentos desde variables de entorno AGI:
 - agi_arg_1: customer_id (requerido) - ID del cliente
 - agi_arg_2: camp_id (requerido) - ID de la campaña
-- agi_arg_3: disposition (requerido) - Disposición
+- agi_arg_3: outcome (opcional) - True/False; si True se usa calificación GESTION_BOT, si False SCHEDULE_CALL_BOT
 - agi_arg_4: url (opcional) - URL del endpoint del webhook
 - agi_arg_5: token (opcional) - Token de autorización Bearer (si no se proporciona, se autentica)
-- agi_arg_6: call_id (opcional) - ID de la llamada
+- agi_arg_6: call_id (opcional) - ID de la llamada (se envía también como X-Verloop-UniqueID y X-Verloop-callID para el backend)
 - agi_arg_7: duration (opcional) - Duración de la llamada en segundos
 - agi_arg_8: call_summary (opcional) - Resumen de la llamada
 - agi_arg_9: sentiment (opcional) - Sentimiento (positive, negative, neutral)
@@ -29,10 +29,14 @@ Variables de entorno:
 - OML_USERNAME: Usuario para autenticación (opcional, puede venir de agi_arg_12)
 - OML_PASSWORD: Contraseña para autenticación (opcional, puede venir de agi_arg_13)
 
-Ejemplo de uso en extensions.conf:
-  AGI(webhook_verloop.py,1,11,Interesado)
-  AGI(webhook_verloop.py,26,11,"No interesado",https://api.example.com/webhook,token123,1767797014.46,300)
-  AGI(webhook_verloop.py,26,11,"Interesado",,,1767797014.46,300,,,,,username,password)
+La disposition (X-Verloop-Disposition) se obtiene automáticamente: se consulta la API
+GET /api/v1/campaign/{camp_id}/dispositionOptions/. Si agi_arg_3 (outcome) es True se usa el id de
+GESTION_BOT; si es False se usa el id de SCHEDULE_CALL_BOT. Si outcome no se pasa, se usa GESTION_BOT.
+
+Ejemplo de uso en extensions.conf (customer_id, camp_id, outcome opcional):
+  AGI(webhook_verloop_client.py,1,26,)
+  AGI(webhook_verloop_client.py,1,26,True,,,,1767797014.46,300)
+  AGI(webhook_verloop_client.py,1,26,False,,,,1767797014.46,300,,,,,username,password)
 """
 
 import os
@@ -155,6 +159,55 @@ def authenticate_oml(
         sys.exit(1)
 
 
+def get_bot_disposition_ids(
+    camp_id: str,
+    token: str,
+    api_host: str,
+    verify_ssl: bool = False
+) -> dict:
+    """
+    Obtiene las opciones de calificación de la campaña y devuelve un diccionario
+    con las calificaciones que terminan en _BOT y su id.
+
+    Args:
+        camp_id: ID de la campaña
+        token: Token de autorización Bearer
+        api_host: URL base de la API OML (ej: https://localhost)
+        verify_ssl: Si verificar certificados SSL
+
+    Returns:
+        Diccionario { "NOMBRE_BOT": id, ... } solo con opciones cuyo name termina en _BOT
+
+    Raises:
+        SystemExit: Si la petición falla
+    """
+    url = f"{api_host.rstrip('/')}/api/v1/campaign/{camp_id}/dispositionOptions/"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            verify=verify_ssl,
+            timeout=30
+        )
+        response.raise_for_status()
+        options = response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error al obtener dispositionOptions: {e}", file=sys.stderr)
+        if hasattr(e, 'response') and e.response is not None and getattr(e.response, 'text', None):
+            print(f"Respuesta del servidor: {e.response.text}", file=sys.stderr)
+        sys.exit(1)
+
+    bot_dispositions = {}
+    for item in options:
+        name = item.get("name") or ""
+        if name.endswith("_BOT"):
+            bot_dispositions[name] = item.get("id")
+
+    return bot_dispositions
+
+
 def send_verloop_webhook(
     customer_id: str,
     camp_id: str,
@@ -226,7 +279,11 @@ def send_verloop_webhook(
     
     if call_id:
         body["call_id"] = call_id
-    
+        # El backend VerloopWebhookView usa X-Verloop-UniqueID o X-Verloop-callID para
+        # calificacion.callid y el comando Redis voicebot_transfer_proceed
+        body["X-Verloop-UniqueID"] = call_id
+        body["X-Verloop-callID"] = call_id
+
     if duration is not None:
         body["duration"] = duration
     
@@ -278,7 +335,7 @@ def send_verloop_webhook(
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"Error al enviar el webhook: {e}", file=sys.stderr)
-        if hasattr(e.response, 'text'):
+        if hasattr(e, 'response') and e.response is not None and getattr(e.response, 'text', None):
             print(f"Respuesta del servidor: {e.response.text}", file=sys.stderr)
         sys.exit(1)
 
@@ -290,7 +347,7 @@ def main():
     # Leer argumentos desde variables de entorno AGI
     # agi_arg_1: customer_id (requerido)
     # agi_arg_2: camp_id (requerido)
-    # agi_arg_3: disposition (requerido)
+    # agi_arg_3: outcome (opcional) - True → GESTION_BOT, False → SCHEDULE_CALL_BOT
     # agi_arg_4: url (opcional)
     # agi_arg_5: token (opcional)
     # agi_arg_6: call_id (opcional)
@@ -311,7 +368,6 @@ def main():
     
     customer_id = agi.env.get('agi_arg_1')
     camp_id = agi.env.get('agi_arg_2')
-    disposition = agi.env.get('agi_arg_3')
     
     # Validar parámetros requeridos
     if not customer_id:
@@ -319,9 +375,6 @@ def main():
         sys.exit(1)
     if not camp_id:
         agi.verbose("Error: agi_arg_2 (camp_id) es requerido", 1)
-        sys.exit(1)
-    if not disposition:
-        agi.verbose("Error: agi_arg_3 (disposition) es requerido", 1)
         sys.exit(1)
     
     # Parámetros opcionales
@@ -359,11 +412,13 @@ def main():
     callback_slot = agi.env.get('agi_arg_19')
     work_type = agi.env.get('agi_arg_20')
     
+    # API host para dispositionOptions (necesario para obtener id GESTION_BOT)
+    api_host = os.environ.get('OML_API_HOST')
+    if api_host:
+        api_host = normalize_api_host(api_host)
+    
     # Si no se proporciona token, autenticar primero
     if not token:
-        # Obtener OML_API_HOST de variables de entorno
-        api_host = os.environ.get('OML_API_HOST')
-        
         if not api_host:
             agi.verbose("Error: OML_API_HOST no está definido y no se proporcionó token", 1)
             sys.exit(1)
@@ -372,8 +427,6 @@ def main():
             agi.verbose("Error: Se requiere username y password para autenticación (agi_arg_12/13 o OML_USERNAME/OML_PASSWORD)", 1)
             sys.exit(1)
         
-        # Normalizar la URL del API host
-        api_host = normalize_api_host(api_host)
         agi.verbose(f"Autenticando en OML: {api_host}", 1)
         try:
             token = authenticate_oml(api_host, username, password, verify_ssl)
@@ -381,6 +434,22 @@ def main():
         except SystemExit:
             agi.verbose("Error en la autenticación", 1)
             sys.exit(1)
+    
+    # Evaluar outcome (agi_arg_3): True → GESTION_BOT, False → SCHEDULE_CALL_BOT (por defecto GESTION_BOT)
+    outcome_str = (agi.env.get('agi_arg_3') or "").strip().lower()
+    outcome_false = outcome_str in ("false", "0", "no", "off")
+    disposition_name = "SCHEDULE_CALL_BOT" if outcome_false else "GESTION_BOT"
+
+    # Obtener opciones de calificación y usar el id según outcome
+    if not api_host:
+        agi.verbose("Error: OML_API_HOST es requerido para obtener las opciones de calificación (dispositionOptions)", 1)
+        sys.exit(1)
+    bot_dispositions = get_bot_disposition_ids(camp_id, token, api_host, verify_ssl)
+    disposition_id = bot_dispositions.get(disposition_name)
+    if disposition_id is None:
+        agi.verbose(f"Error: No se encontró la opción de calificación {disposition_name} en la campaña", 1)
+        sys.exit(1)
+    disposition = str(disposition_id)
     
     # La función send_verloop_webhook construirá la URL desde OML_API_HOST si no se proporciona
     result = send_verloop_webhook(
