@@ -6,9 +6,10 @@ Este script recibe los argumentos desde variables de entorno AGI:
 - agi_arg_1: customer_id (requerido) - ID del cliente
 - agi_arg_2: camp_id (requerido) - ID de la campaña
 - agi_arg_3: outcome (opcional) - True/False; si True se usa calificación GESTION_BOT, si False SCHEDULE_CALL_BOT
-- agi_arg_4: url (opcional) - URL del endpoint del webhook
+- agi_arg_4: url o callid (opcional) - Si contiene "://" es URL del webhook; si no, es callid (4º parámetro de negocio).
+  Permite llamar con (customer_id, camp_id, outcome, callid) sin especificar url.
 - agi_arg_5: token (opcional) - Token de autorización Bearer (si no se proporciona, se autentica)
-- agi_arg_6: call_id (opcional) - ID de la llamada (se envía también como X-Verloop-UniqueID y X-Verloop-callID para el backend)
+- agi_arg_6: call_id (opcional) - ID de la llamada cuando no se usa agi_arg_4 como callid
 - agi_arg_7: duration (opcional) - Duración de la llamada en segundos
 - agi_arg_8: call_summary (opcional) - Resumen de la llamada
 - agi_arg_9: sentiment (opcional) - Sentimiento (positive, negative, neutral)
@@ -33,10 +34,15 @@ La disposition (X-Verloop-Disposition) se obtiene automáticamente: se consulta 
 GET /api/v1/campaign/{camp_id}/dispositionOptions/. Si agi_arg_3 (outcome) es True se usa el id de
 GESTION_BOT; si es False se usa el id de SCHEDULE_CALL_BOT. Si outcome no se pasa, se usa GESTION_BOT.
 
-Ejemplo de uso en extensions.conf (customer_id, camp_id, outcome opcional):
+En el body del webhook se envía además el campo "callid" (4º parámetro de negocio) cuando se
+proporciona agi_arg_6 (call_id), para que el backend pueda proseguir la transferencia vía
+comando Redis Pub/Sub voicebot_transfer_proceed sin error.
+
+Ejemplo de uso en extensions.conf (customer_id, camp_id, outcome opcional, callid como 4º arg):
   AGI(webhook_verloop_client.py,1,26,)
-  AGI(webhook_verloop_client.py,1,26,True,,,,1767797014.46,300)
-  AGI(webhook_verloop_client.py,1,26,False,,,,1767797014.46,300,,,,,username,password)
+  AGI(webhook_verloop_client.py,1,26,True)
+  AGI(webhook_verloop_client.py,1,26,False,1771024232.107)
+  AGI(webhook_verloop_client.py,1,26,False,,,1767797014.46,300,,,,,username,password)
 """
 
 import os
@@ -275,11 +281,13 @@ def send_verloop_webhook(
         "X-Verloop-customerID": customer_id,
         "X-Verloop-CampID": camp_id,
         "X-Verloop-Disposition": disposition,
+        "X-Verloop-UniqueID": call_id,
     }
     
     if call_id:
         body["call_id"] = call_id
-        # El backend VerloopWebhookView usa X-Verloop-UniqueID o X-Verloop-callID para
+        body["callid"] = call_id  # 4º parámetro de negocio para calificación y Redis voicebot_transfer_proceed
+        # X-Verloop-UniqueID / X-Verloop-callID para compatibilidad con VerloopWebhookView
         # calificacion.callid y el comando Redis voicebot_transfer_proceed
         body["X-Verloop-UniqueID"] = call_id
         body["X-Verloop-callID"] = call_id
@@ -378,9 +386,16 @@ def main():
         sys.exit(1)
     
     # Parámetros opcionales
-    url = agi.env.get('agi_arg_4')
+    # agi_arg_4: puede ser URL del webhook o callid (4º parámetro de negocio).
+    # Si contiene "://" se interpreta como URL; si no, como call_id cuando agi_arg_6 no está definido.
+    arg_4 = (agi.env.get('agi_arg_4') or '').strip()
+    if arg_4 and ('://' in arg_4 or arg_4.lower().startswith('http')):
+        url = arg_4
+        call_id = agi.env.get('agi_arg_6')
+    else:
+        url = None
+        call_id = agi.env.get('agi_arg_6') or (arg_4 if arg_4 else None)
     token = agi.env.get('agi_arg_5')
-    call_id = agi.env.get('agi_arg_6')
     
     # Convertir duration a int si está presente
     duration = None
