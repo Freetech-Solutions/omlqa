@@ -1,0 +1,56 @@
+stages:
+  # - lint
+  # - test
+  - build
+
+variables:
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_DRIVER: overlay2
+
+services:
+  - name: docker:dind
+    command: ["--tls=false"]
+
+.build_template:
+  image: docker:20.10.15-alpine3.15
+  services:
+    - docker:20.10.15-dind-alpine3.15
+  before_script:
+    - apk add --no-cache docker-cli-buildx
+  script:
+    - echo "Building ${IMAGE_NAME}..."
+    - ls -l ${DOCKERFILE_PATH}
+    - docker buildx build --file=${DOCKERFILE_PATH} --tag=${IMAGE_NAME} ${BUILD_CONTEXT}
+    - |-
+      echo "Pushing image ${IMAGE_NAME}..."
+      if [ "${CI_COMMIT_BRANCH}" == "main" ]; then
+        echo "${DOCKER_SECRET}" | docker login --username "${DOCKER_USERNAME}" --password-stdin
+        IMAGE_VERSION="$(date +%Y%m%d)-${CI_COMMIT_SHORT_SHA}"
+        docker tag ${IMAGE_NAME} docker.io/omnileads/${IMAGE_NAME}:$IMAGE_VERSION
+        docker push docker.io/omnileads/${IMAGE_NAME}:$IMAGE_VERSION
+      else
+        echo "${DOCKER_PASSWORD}" | docker login --username "${DOCKER_USER}" --password-stdin
+        IMAGE_VERSION="$(date +%Y%m%d)-${CI_COMMIT_SHORT_SHA}"
+        docker tag ${IMAGE_NAME} docker.io/freetechsolutions/${IMAGE_NAME}:$IMAGE_VERSION
+        docker push docker.io/freetechsolutions/${IMAGE_NAME}:$IMAGE_VERSION
+      fi
+  rules:
+    - if: '$CI_COMMIT_REF_NAME =~ /build/'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+
+container-image-nginx:
+  extends: .build_template
+  stage: build
+  variables:
+    IMAGE_NAME: "omlqa_nginx"
+    DOCKERFILE_PATH: "nginx/Dockerfile"
+    BUILD_CONTEXT: "nginx"
+
+container-image-pstn-emulator:
+  extends: .build_template
+  stage: build
+  variables:
+    IMAGE_NAME: "pstn_emulator"
+    DOCKERFILE_PATH: "pstn_emulator/Dockerfile"
+    BUILD_CONTEXT: "pstn_emulator"
