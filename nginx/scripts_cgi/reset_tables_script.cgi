@@ -20,9 +20,10 @@ EOF
 }
 
 # Intenta ejecutar los comandos redirigiendo su salida a /dev/null
-if PGPASSWORD=${PGPASSWORD} psql -U omnileads -h ${PGHOST} -d omnileads -c 'DELETE FROM queue_log' > /dev/null 2>&1 &&
-   PGPASSWORD=${PGPASSWORD} psql -U omnileads -h ${PGHOST} -d omnileads -c 'DELETE FROM reportes_app_llamadalog' > /dev/null 2>&1 &&
-   PGPASSWORD=${PGPASSWORD} psql -U omnileads -h ${PGHOST} -d omnileads -c 'DELETE FROM reportes_app_actividadagentelog' > /dev/null 2>&1 &&
+if
+   PGPASSWORD=${PGPASSWORD} psql -U omnileads -h ${PGHOST} -d omnileads -c 'DELETE FROM interactions_summary' > /dev/null 2>&1 &&
+   PGPASSWORD=${PGPASSWORD} psql -U omnileads -h ${PGHOST} -d omnileads -c 'DELETE FROM interaction_transfers' > /dev/null 2>&1 &&  
+   PGPASSWORD=${PGPASSWORD} psql -U omnileads -h ${PGHOST} -d omnileads -c 'DELETE FROM reportes_app_agentactivityeventv2' > /dev/null 2>&1 &&
    PGPASSWORD=${PGPASSWORD} psql -U omnileads -h ${PGHOST} -d omnileads -c 'DELETE FROM ominicontacto_app_respuestaformulariogestion' > /dev/null 2>&1 &&
    PGPASSWORD=${PGPASSWORD} psql -U omnileads -h ${PGHOST} -d omnileads -c 'DELETE FROM ominicontacto_app_auditoriacalificacion' > /dev/null 2>&1 &&
    PGPASSWORD=${PGPASSWORD} psql -U omnileads -h ${PGHOST} -d omnileads -c 'DELETE FROM ominicontacto_app_calificacioncliente' > /dev/null 2>&1; then
