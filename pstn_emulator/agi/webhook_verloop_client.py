@@ -29,6 +29,16 @@ Variables de entorno:
 - OML_API_HOST: URL base de la API OML (requerido si no se proporciona token)
 - OML_USERNAME: Usuario para autenticación (opcional, puede venir de agi_arg_12)
 - OML_PASSWORD: Contraseña para autenticación (opcional, puede venir de agi_arg_13)
+- OML_ID_EXTERNAL_SYSTEM: pk del sistema externo (opcional). Si camp_id (agi_arg_2) es el id_externo
+  de la campaña, definir esta variable para el query idExternalSystem del GET de detalle de contacto.
+- OML_CONTACT_DETAIL_REQUIRED: si es "true"/"1"/"yes"/"on", un fallo al obtener el detalle del
+  contacto aborta el script; por defecto solo se registra el error y se continúa.
+
+Flujo (tras autenticación si aplica):
+1) GET /api/v1/campaign/{camp_id}/contacts/{customer_id}/ (Bearer) — solo logging AGI verbose;
+   no modifica el body del webhook.
+2) GET /api/v1/campaign/{camp_id}/dispositionOptions/ — obtiene id de calificación BOT según outcome.
+3) POST al webhook Verloop (OML) con X-Verloop-Disposition y el resto de campos.
 
 La disposition (X-Verloop-Disposition) se obtiene automáticamente: se consulta la API
 GET /api/v1/campaign/{camp_id}/dispositionOptions/. Si agi_arg_3 (outcome) es True se usa el id de
@@ -50,7 +60,12 @@ import json
 import requests
 import sys
 from typing import Optional
+from urllib.parse import quote, urlencode
+
 from asterisk.agi import AGI
+
+# Longitud máxima del mensaje verbose para detalle de contacto (AGI / consola).
+_VERBOSE_CONTACT_DETAIL_MAX = 3500
 
 
 def normalize_api_host(api_host: str) -> str:
@@ -212,6 +227,79 @@ def get_bot_disposition_ids(
             bot_dispositions[name] = item.get("id")
 
     return bot_dispositions
+
+
+def fetch_contacto_detalle_oml(
+    camp_id: str,
+    contact_id: str,
+    token: str,
+    api_host: str,
+    verify_ssl: bool = False,
+    id_external_system: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    GET detalle de contacto por campaña (solo para logging en el AGI).
+
+    GET {api_host}/api/v1/campaign/{camp_id}/contacts/{contact_id}/
+    Query opcional: idExternalSystem (pk) si camp_id es id_externo.
+
+    Returns:
+        dict parseado de JSON si la respuesta es 200; None si error de red, HTTP o datos inválidos.
+    """
+    try:
+        contact_pk = int(str(contact_id).strip())
+        if contact_pk <= 0:
+            raise ValueError("contact_pk must be positive")
+    except (ValueError, TypeError):
+        print(
+            f"fetch_contacto_detalle_oml: contact_id inválido (se espera pk numérico): {contact_id!r}",
+            file=sys.stderr,
+        )
+        return None
+
+    query: dict = {}
+    if id_external_system is not None and str(id_external_system).strip() != "":
+        try:
+            query["idExternalSystem"] = int(str(id_external_system).strip())
+        except (ValueError, TypeError):
+            print(
+                f"fetch_contacto_detalle_oml: id_external_system inválido: {id_external_system!r}",
+                file=sys.stderr,
+            )
+            return None
+
+    camp_segment = quote(str(camp_id).strip(), safe="")
+    url = f"{api_host.rstrip('/')}/api/v1/campaign/{camp_segment}/contacts/{contact_pk}/"
+    if query:
+        url += "?" + urlencode(query)
+
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            verify=verify_ssl,
+            timeout=30,
+        )
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        print(f"fetch_contacto_detalle_oml HTTP: {e}", file=sys.stderr)
+        if hasattr(e, "response") and e.response is not None:
+            try:
+                print(f"  URL: {url}", file=sys.stderr)
+                print(f"  body: {e.response.text[:2000]}", file=sys.stderr)
+            except Exception:
+                pass
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f"fetch_contacto_detalle_oml: {e}", file=sys.stderr)
+        return None
+
+    try:
+        return response.json()
+    except ValueError:
+        print("fetch_contacto_detalle_oml: respuesta no es JSON válido", file=sys.stderr)
+        return None
 
 
 def send_verloop_webhook(
@@ -449,7 +537,44 @@ def main():
         except SystemExit:
             agi.verbose("Error en la autenticación", 1)
             sys.exit(1)
-    
+
+    # 1) Detalle de contacto OML (solo log; no modifica el body del webhook)
+    detail_required = os.environ.get("OML_CONTACT_DETAIL_REQUIRED", "").lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+    ext_sys_raw = (os.environ.get("OML_ID_EXTERNAL_SYSTEM") or "").strip()
+    ext_sys_param = ext_sys_raw if ext_sys_raw else None
+
+    if api_host:
+        contact_detail = fetch_contacto_detalle_oml(
+            camp_id,
+            customer_id,
+            token,
+            api_host,
+            verify_ssl,
+            id_external_system=ext_sys_param,
+        )
+        if contact_detail is not None:
+            log_payload = json.dumps(contact_detail, ensure_ascii=False)
+            if len(log_payload) > _VERBOSE_CONTACT_DETAIL_MAX:
+                log_payload = log_payload[:_VERBOSE_CONTACT_DETAIL_MAX] + "...(truncado)"
+            if contact_detail.get("status") == "OK":
+                agi.verbose(f"OML contacto detalle: {log_payload}", 1)
+            else:
+                agi.verbose(f"OML contacto detalle (respuesta no OK): {log_payload}", 1)
+        else:
+            msg = "No se pudo obtener el detalle del contacto; se continúa con disposition y webhook"
+            agi.verbose(msg, 2)
+            print(msg, file=sys.stderr)
+            if detail_required:
+                agi.verbose("OML_CONTACT_DETAIL_REQUIRED activo: abortando", 1)
+                sys.exit(1)
+    else:
+        agi.verbose("OML_API_HOST ausente: se omite GET detalle de contacto", 2)
+
     # Evaluar outcome (agi_arg_3): True → GESTION_BOT, False → SCHEDULE_CALL_BOT (por defecto GESTION_BOT)
     outcome_str = (agi.env.get('agi_arg_3') or "").strip().lower()
     outcome_false = outcome_str in ("false", "0", "no", "off")
@@ -465,7 +590,7 @@ def main():
         agi.verbose(f"Error: No se encontró la opción de calificación {disposition_name} en la campaña", 1)
         sys.exit(1)
     disposition = str(disposition_id)
-    
+
     # La función send_verloop_webhook construirá la URL desde OML_API_HOST si no se proporciona
     result = send_verloop_webhook(
         customer_id=customer_id,
