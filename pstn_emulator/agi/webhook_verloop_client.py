@@ -1,15 +1,21 @@
 #!/usr/bin/env python
 """
-Script AGI para enviar webhook a Verloop con parámetros personalizados.
+Script AGI para enviar el webhook genérico de voicebot de OML con parámetros personalizados.
+
+Endpoint destino: POST {OML_API_HOST}/api/v1/webhook/voicebot/ (VoicebotWebhookView).
+Los campos de identificación se envían en el body JSON con el prefijo X-OML-* (con ese nombre
+EXACTO). El resto de campos no prefijados con X- se aplanan como observaciones en el backend.
 
 Este script recibe los argumentos desde variables de entorno AGI:
-- agi_arg_1: customer_id (requerido) - ID del cliente
-- agi_arg_2: camp_id (requerido) - ID de la campaña
+- agi_arg_1: customer_id (requerido) - ID del contacto (X-OML-Contact-ID)
+- agi_arg_2: camp_id (requerido) - ID de la campaña OML (X-OML-Campaign-ID); debe ser el pk de la
+  campaña a la que pertenece la OpcionCalificacion.
 - agi_arg_3: outcome (opcional) - True/False; si True se usa calificación GESTION_BOT, si False SCHEDULE_CALL_BOT
-- agi_arg_4: url o callid (opcional) - Si contiene "://" es URL del webhook; si no, es callid (4º parámetro de negocio).
-  Permite llamar con (customer_id, camp_id, outcome, callid) sin especificar url.
+- agi_arg_4: url o callid (opcional) - Si contiene "://" es URL del webhook; si no, es call_id
+  (X-OML-Call-ID). Permite llamar con (customer_id, camp_id, outcome, callid) sin especificar url.
 - agi_arg_5: token (opcional) - Token de autorización Bearer (si no se proporciona, se autentica)
-- agi_arg_6: call_id (opcional) - ID de la llamada cuando no se usa agi_arg_4 como callid
+- agi_arg_6: call_id (requerido) - ID de la llamada en el ACD (X-OML-Call-ID); puede venir como
+  agi_arg_4 cuando éste no es una URL.
 - agi_arg_7: duration (opcional) - Duración de la llamada en segundos
 - agi_arg_8: call_summary (opcional) - Resumen de la llamada
 - agi_arg_9: sentiment (opcional) - Sentimiento (positive, negative, neutral)
@@ -38,19 +44,18 @@ Flujo (tras autenticación si aplica):
 1) GET /api/v1/campaign/{camp_id}/contacts/{customer_id}/ (Bearer) — solo logging AGI verbose;
    no modifica el body del webhook.
 2) GET /api/v1/campaign/{camp_id}/dispositionOptions/ — obtiene id de calificación BOT según outcome.
-3) POST al webhook Verloop (OML) con X-Verloop-Disposition y el resto de campos.
+3) POST al webhook voicebot (OML) con X-OML-Disposition y el resto de campos.
 
-La disposition (X-Verloop-Disposition) se obtiene automáticamente: se consulta la API
+La disposition (X-OML-Disposition) se obtiene automáticamente: se consulta la API
 GET /api/v1/campaign/{camp_id}/dispositionOptions/. Si agi_arg_3 (outcome) es True se usa el id de
 GESTION_BOT; si es False se usa el id de SCHEDULE_CALL_BOT. Si outcome no se pasa, se usa GESTION_BOT.
 
-En el body del webhook se envía además el campo "callid" (4º parámetro de negocio) cuando se
-proporciona agi_arg_6 (call_id), para que el backend pueda proseguir la transferencia vía
-comando Redis Pub/Sub voicebot_transfer_proceed sin error.
+El call_id (X-OML-Call-ID) es OBLIGATORIO para el endpoint voicebot: se persiste como callid de la
+calificación y, cuando la calificación aplicada es GESTION_BOT, el backend publica el comando Redis
+Pub/Sub voicebot_transfer_proceed para proseguir la transferencia pendiente.
 
 Ejemplo de uso en extensions.conf (customer_id, camp_id, outcome opcional, callid como 4º arg):
-  AGI(webhook_verloop_client.py,1,26,)
-  AGI(webhook_verloop_client.py,1,26,True)
+  AGI(webhook_verloop_client.py,1,26,True,1771024232.107)
   AGI(webhook_verloop_client.py,1,26,False,1771024232.107)
   AGI(webhook_verloop_client.py,1,26,False,,,1767797014.46,300,,,,,username,password)
 """
@@ -302,13 +307,13 @@ def fetch_contacto_detalle_oml(
         return None
 
 
-def send_verloop_webhook(
+def send_voicebot_webhook(
     customer_id: str,
     camp_id: str,
     disposition: str,
+    call_id: str,
     url: Optional[str] = None,
     token: Optional[str] = None,
-    call_id: Optional[str] = None,
     duration: Optional[int] = None,
     call_summary: Optional[str] = None,
     sentiment: Optional[str] = None,
@@ -323,15 +328,15 @@ def send_verloop_webhook(
     work_type: Optional[str] = None
 ) -> dict:
     """
-    Envía un webhook a Verloop con los parámetros especificados.
-    
+    Envía el webhook genérico de voicebot de OML con los parámetros especificados.
+
     Args:
-        customer_id: ID del cliente (X-Verloop-customerID)
-        camp_id: ID de la campaña (X-Verloop-CampID)
-        disposition: Disposición (X-Verloop-Disposition)
+        customer_id: ID del contacto (X-OML-Contact-ID)
+        camp_id: ID de la campaña OML (X-OML-Campaign-ID)
+        disposition: ID de la OpcionCalificacion (X-OML-Disposition)
+        call_id: ID de la llamada en el ACD (X-OML-Call-ID), obligatorio
         url: URL del endpoint del webhook (si es None, se construye desde OML_API_HOST)
         token: Token de autorización Bearer
-        call_id: ID de la llamada
         duration: Duración de la llamada en segundos
         call_summary: Resumen de la llamada
         sentiment: Sentimiento de la llamada
@@ -353,9 +358,9 @@ def send_verloop_webhook(
         api_host = os.environ.get('OML_API_HOST')
         if api_host:
             api_host = normalize_api_host(api_host)
-            url = f"{api_host}/api/v1/webhook/verloop/"
+            url = f"{api_host}/api/v1/webhook/voicebot/"
         else:
-            url = "https://localhost/api/v1/webhook/verloop/"
+            url = "https://localhost/api/v1/webhook/voicebot/"
     
     headers = {
         "Content-Type": "application/json",
@@ -364,21 +369,14 @@ def send_verloop_webhook(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     
-    # Preparar el body del request (formato según ejemplo: datos en el JSON, no en headers)
+    # Campos de identificación obligatorios del endpoint voicebot (X-OML-*, nombre exacto).
+    # El backend lee estos campos del body JSON y aplana el resto como observaciones.
     body = {
-        "X-Verloop-customerID": customer_id,
-        "X-Verloop-CampID": camp_id,
-        "X-Verloop-Disposition": disposition,
-        "X-Verloop-UniqueID": call_id,
+        "X-OML-Contact-ID": customer_id,
+        "X-OML-Campaign-ID": camp_id,
+        "X-OML-Call-ID": call_id,
+        "X-OML-Disposition": disposition,
     }
-    
-    if call_id:
-        body["call_id"] = call_id
-        body["callid"] = call_id  # 4º parámetro de negocio para calificación y Redis voicebot_transfer_proceed
-        # X-Verloop-UniqueID / X-Verloop-callID para compatibilidad con VerloopWebhookView
-        # calificacion.callid y el comando Redis voicebot_transfer_proceed
-        body["X-Verloop-UniqueID"] = call_id
-        body["X-Verloop-callID"] = call_id
 
     if duration is not None:
         body["duration"] = duration
@@ -474,7 +472,7 @@ def main():
         sys.exit(1)
     
     # Parámetros opcionales
-    # agi_arg_4: puede ser URL del webhook o callid (4º parámetro de negocio).
+    # agi_arg_4: puede ser URL del webhook o call_id (X-OML-Call-ID).
     # Si contiene "://" se interpreta como URL; si no, como call_id cuando agi_arg_6 no está definido.
     arg_4 = (agi.env.get('agi_arg_4') or '').strip()
     if arg_4 and ('://' in arg_4 or arg_4.lower().startswith('http')):
@@ -484,6 +482,13 @@ def main():
         url = None
         call_id = agi.env.get('agi_arg_6') or (arg_4 if arg_4 else None)
     token = agi.env.get('agi_arg_5')
+
+    # call_id (X-OML-Call-ID) es obligatorio para el endpoint voicebot
+    if not call_id:
+        agi.verbose(
+            "Error: call_id (X-OML-Call-ID) es requerido (agi_arg_4 si no es URL, o agi_arg_6)", 1
+        )
+        sys.exit(1)
     
     # Convertir duration a int si está presente
     duration = None
@@ -591,14 +596,14 @@ def main():
         sys.exit(1)
     disposition = str(disposition_id)
 
-    # La función send_verloop_webhook construirá la URL desde OML_API_HOST si no se proporciona
-    result = send_verloop_webhook(
+    # La función send_voicebot_webhook construirá la URL desde OML_API_HOST si no se proporciona
+    result = send_voicebot_webhook(
         customer_id=customer_id,
         camp_id=camp_id,
         disposition=disposition,
+        call_id=call_id,
         url=url,
         token=token,
-        call_id=call_id,
         duration=duration,
         call_summary=call_summary,
         sentiment=sentiment,
