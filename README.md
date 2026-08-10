@@ -1,6 +1,6 @@
 # OMniLeads QA tools
 
-En este repositorio contamos con tres componentes utiles para testear una instancia de OMniLeads:
+En este repositorio contamos con componentes utiles para testear una instancia de OMniLeads:
 
 * Nginx CGI: para servir algunas acciones que selenium necesita disparar sobre el entorno.
 * PSTN emulator: para simular la interaccion con la PSTN en todos los tipos de llamadas que comprueban los tests.
