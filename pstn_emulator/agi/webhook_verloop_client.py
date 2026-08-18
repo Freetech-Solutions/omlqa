@@ -10,7 +10,10 @@ Este script recibe los argumentos desde variables de entorno AGI:
 - agi_arg_1: customer_id (requerido) - ID del contacto (X-OML-Contact-ID)
 - agi_arg_2: camp_id (requerido) - ID de la campaña OML (X-OML-Campaign-ID); debe ser el pk de la
   campaña a la que pertenece la OpcionCalificacion.
-- agi_arg_3: outcome (opcional) - True/False; si True se usa calificación GESTION_BOT, si False SCHEDULE_CALL_BOT
+- agi_arg_3: outcome (opcional) - True → GESTION_BOT; False → SCHEDULE_CALL_BOT;
+  MUDA_BOT (o muda) → MUDA_BOT; agenda → POST /api/v1/webhook/voicebot/ con
+  call_summary (anexa a AgendaContacto previa; el dialplan debe haber llamado
+  agenda.py antes)
 - agi_arg_4: url o callid (opcional) - Si contiene "://" es URL del webhook; si no, es call_id
   (X-OML-Call-ID). Permite llamar con (customer_id, camp_id, outcome, callid) sin especificar url.
 - agi_arg_5: token (opcional) - Token de autorización Bearer (si no se proporciona, se autentica)
@@ -41,23 +44,33 @@ Variables de entorno:
   contacto aborta el script; por defecto solo se registra el error y se continúa.
 
 Flujo (tras autenticación si aplica):
-1) GET /api/v1/campaign/{camp_id}/contacts/{customer_id}/ (Bearer) — solo logging AGI verbose;
-   no modifica el body del webhook.
+1) GET /api/v1/campaign/{camp_id}/contacts/{customer_id}/ (Bearer) — logging AGI verbose.
+   Si agi_arg_8 (call_summary) no viene, se arma un resumen QA con nombre/teléfono del contacto
+   (texto distinto si outcome=agenda).
 2) GET /api/v1/campaign/{camp_id}/dispositionOptions/ — obtiene id de calificación BOT según outcome.
-3) POST al webhook voicebot (OML) con X-OML-Disposition y el resto de campos.
+3) POST al webhook voicebot (OML) con X-OML-Disposition, call_summary y el resto de campos.
+   Si outcome=agenda y ya existe AgendaContacto, Django solo anexa el summary (sin transfer ACD).
 
 La disposition (X-OML-Disposition) se obtiene automáticamente: se consulta la API
 GET /api/v1/campaign/{camp_id}/dispositionOptions/. Si agi_arg_3 (outcome) es True se usa el id de
-GESTION_BOT; si es False se usa el id de SCHEDULE_CALL_BOT. Si outcome no se pasa, se usa GESTION_BOT.
+GESTION_BOT; si es False se usa el id de SCHEDULE_CALL_BOT. Si outcome es "agenda" también se
+usa GESTION_BOT (requerido por el API; Django no cambia la calificación Agenda ni publica
+voicebot_transfer_proceed cuando hay agenda previa). Si outcome no se pasa, se usa GESTION_BOT.
 
 El call_id (X-OML-Call-ID) es OBLIGATORIO para el endpoint voicebot: se persiste como callid de la
-calificación y, cuando la calificación aplicada es GESTION_BOT, el backend publica el comando Redis
-Pub/Sub voicebot_transfer_proceed para proseguir la transferencia pendiente.
+calificación y, cuando la calificación aplicada es GESTION_BOT y no hay agenda previa, el backend
+publica el comando Redis Pub/Sub voicebot_transfer_proceed para proseguir la transferencia pendiente.
 
-Ejemplo de uso en extensions.conf (customer_id, camp_id, outcome opcional, callid como 4º arg):
+Ejemplo de uso en extensions.conf (customer_id, camp_id, outcome opcional, callid como 4º arg).
+Si no se pasa agi_arg_8 el script genera un call_summary de emulador:
   AGI(webhook_verloop_client.py,1,26,True,1771024232.107)
   AGI(webhook_verloop_client.py,1,26,False,1771024232.107)
+  AGI(webhook_verloop_client.py,1,26,agenda,1771024232.107)
   AGI(webhook_verloop_client.py,1,26,False,,,1767797014.46,300,,,,,username,password)
+
+Flujo agenda+summary (dos AGI en dialplan):
+  AGI(agenda.py,...)  → crea AgendaContacto
+  AGI(webhook_verloop_client.py,...,agenda,...)  → anexa call_summary (sin transfer ACD)
 """
 
 import os
@@ -71,6 +84,63 @@ from asterisk.agi import AGI
 
 # Longitud máxima del mensaje verbose para detalle de contacto (AGI / consola).
 _VERBOSE_CONTACT_DETAIL_MAX = 3500
+
+
+def build_default_call_summary(
+    contact_detail: Optional[dict],
+    customer_id: str,
+    camp_id: str,
+    call_id: str,
+    phone: Optional[str] = None,
+) -> str:
+    """Arma un call_summary QA si el dialplan no pasó agi_arg_8."""
+    nombre = ""
+    tel = (phone or "").strip()
+    if isinstance(contact_detail, dict):
+        contacto = contact_detail.get("contacto")
+        if isinstance(contacto, dict):
+            parts = [
+                str(contacto.get("nombre") or "").strip(),
+                str(contacto.get("apellido") or "").strip(),
+            ]
+            nombre = " ".join(p for p in parts if p)
+            if not tel:
+                tel = str(contacto.get("telefono") or "").strip()
+    who = nombre or f"contacto {customer_id}"
+    tel_bit = f" (tel. {tel})" if tel else ""
+    return (
+        f"El cliente {who}{tel_bit} interactuó con el voicebot. "
+        f"Solicitó ser atendido por un agente humano. "
+        f"Campaña {camp_id}, llamada {call_id}."
+    )
+
+
+def build_default_agenda_call_summary(
+    contact_detail: Optional[dict],
+    customer_id: str,
+    camp_id: str,
+    call_id: str,
+    phone: Optional[str] = None,
+) -> str:
+    """call_summary QA para outcome=agenda (anexar a observaciones de AgendaContacto)."""
+    nombre = ""
+    tel = (phone or "").strip()
+    if isinstance(contact_detail, dict):
+        contacto = contact_detail.get("contacto")
+        if isinstance(contacto, dict):
+            parts = [
+                str(contacto.get("nombre") or "").strip(),
+                str(contacto.get("apellido") or "").strip(),
+            ]
+            nombre = " ".join(p for p in parts if p)
+            if not tel:
+                tel = str(contacto.get("telefono") or "").strip()
+    who = nombre or f"contacto {customer_id}"
+    tel_bit = f" (tel. {tel})" if tel else ""
+    return (
+        f"El cliente {who}{tel_bit} solicitó un callback vía voicebot. "
+        f"Se agendó el contacto. Campaña {camp_id}, llamada {call_id}."
+    )
 
 
 def normalize_api_host(api_host: str) -> str:
@@ -442,6 +512,7 @@ def main():
     # agi_arg_1: customer_id (requerido)
     # agi_arg_2: camp_id (requerido)
     # agi_arg_3: outcome (opcional) - True → GESTION_BOT, False → SCHEDULE_CALL_BOT
+    #              agenda → summary anexado a AgendaContacto previa
     # agi_arg_4: url (opcional)
     # agi_arg_5: token (opcional)
     # agi_arg_6: call_id (opcional)
@@ -499,7 +570,7 @@ def main():
         except ValueError:
             agi.verbose(f"Advertencia: agi_arg_7 (duration) no es un número válido: {duration_str}", 2)
     
-    call_summary = agi.env.get('agi_arg_8')
+    call_summary = (agi.env.get('agi_arg_8') or '').strip() or None
     sentiment = agi.env.get('agi_arg_9')
     summary = agi.env.get('agi_arg_10')
     
@@ -543,7 +614,7 @@ def main():
             agi.verbose("Error en la autenticación", 1)
             sys.exit(1)
 
-    # 1) Detalle de contacto OML (solo log; no modifica el body del webhook)
+    # 1) Detalle de contacto OML (log + fuente para call_summary por defecto)
     detail_required = os.environ.get("OML_CONTACT_DETAIL_REQUIRED", "").lower() in (
         "true",
         "1",
@@ -552,6 +623,7 @@ def main():
     )
     ext_sys_raw = (os.environ.get("OML_ID_EXTERNAL_SYSTEM") or "").strip()
     ext_sys_param = ext_sys_raw if ext_sys_raw else None
+    contact_detail = None
 
     if api_host:
         contact_detail = fetch_contacto_detalle_oml(
@@ -580,10 +652,46 @@ def main():
     else:
         agi.verbose("OML_API_HOST ausente: se omite GET detalle de contacto", 2)
 
-    # Evaluar outcome (agi_arg_3): True → GESTION_BOT, False → SCHEDULE_CALL_BOT (por defecto GESTION_BOT)
+    # Evaluar outcome (agi_arg_3): True → GESTION_BOT, False → SCHEDULE_CALL_BOT,
+    # MUDA_BOT/muda → MUDA_BOT, "agenda" → POST /webhook/voicebot/ con call_summary
+    # (anexa a AgendaContacto previa creada por agenda.py; sin transfer ACD).
     outcome_str = (agi.env.get('agi_arg_3') or "").strip().lower()
-    outcome_false = outcome_str in ("false", "0", "no", "off")
-    disposition_name = "SCHEDULE_CALL_BOT" if outcome_false else "GESTION_BOT"
+
+    if not call_summary:
+        phone_for_summary = phone or agi.env.get("agi_callerid")
+        if outcome_str == "agenda":
+            call_summary = build_default_agenda_call_summary(
+                contact_detail,
+                customer_id,
+                camp_id,
+                call_id,
+                phone=phone_for_summary,
+            )
+        else:
+            call_summary = build_default_call_summary(
+                contact_detail,
+                customer_id,
+                camp_id,
+                call_id,
+                phone=phone_for_summary,
+            )
+        agi.verbose(f"call_summary generado por emulador: {call_summary}", 1)
+
+    if outcome_str == "agenda":
+        disposition_name = "GESTION_BOT"
+        agi.verbose(
+            f"outcome=agenda: anexando summary a agenda previa "
+            f"contact={customer_id} camp={camp_id}",
+            1,
+        )
+    elif outcome_str in ("false", "0", "no", "off"):
+        disposition_name = "SCHEDULE_CALL_BOT"
+    elif outcome_str in ("muda", "muda_bot"):
+        disposition_name = "MUDA_BOT"
+    elif outcome_str.endswith("_bot") and outcome_str not in ("true", "1", "yes", "on", ""):
+        disposition_name = outcome_str.upper()
+    else:
+        disposition_name = "GESTION_BOT"
 
     # Obtener opciones de calificación y usar el id según outcome
     if not api_host:
