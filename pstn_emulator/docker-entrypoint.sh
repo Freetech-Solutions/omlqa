@@ -47,7 +47,21 @@ fi
 if [ -n "$SIP_EXTERNAL_PORT" ]; then
   sed -i "s/external_sip_port/$SIP_EXTERNAL_PORT/g" /etc/asterisk/pjsip.conf
   sed -i "s/;external_signaling_port/external_signaling_port/g" /etc/asterisk/pjsip.conf
-fi 
+fi
 
+# PJSIP identify for the OML trunk via kamailio-pstn. El match es CIDR (sin DNS
+# en el load de Asterisk): se inyecta identify/match=${SUBNET} bajo la línea
+# remote_hosts del wizard [01177660010]. Así el identify no depende de que
+# kamailio-pstn ya exista en el DNS de Docker al arrancar.
+PSTN_PEER="${KAMAILIO_PSTN_HOSTNAME:-kamailio-pstn}"
+WIZARD=/etc/asterisk/pjsip_wizard.conf
+if [ -f "$WIZARD" ]; then
+  if [ "$PSTN_PEER" != "kamailio-pstn" ]; then
+    sed -i "s/kamailio-pstn/${PSTN_PEER}/g" "$WIZARD"
+  fi
+  if [ -n "$SUBNET" ] && ! grep -q "identify/match=${SUBNET}" "$WIZARD"; then
+    sed -i "/^remote_hosts=${PSTN_PEER}\$/a identify/match=${SUBNET}" "$WIZARD"
+  fi
+fi
 
 exec ${COMMAND}
