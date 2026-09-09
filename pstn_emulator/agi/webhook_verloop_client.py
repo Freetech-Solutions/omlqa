@@ -1,19 +1,23 @@
 #!/usr/bin/env python
 """
-Script AGI para enviar el webhook genérico de voicebot de OML con parámetros personalizados.
+Script AGI que emula el bot real frente a OML: califica primero y luego envía el
+webhook de summary/handoff.
 
-Endpoint destino: POST {OML_API_HOST}/api/v1/webhook/voicebot/ (VoicebotWebhookView).
-Los campos de identificación se envían en el body JSON con el prefijo X-OML-* (con ese nombre
-EXACTO). El resto de campos no prefijados con X- se aplanan como observaciones en el backend.
+Endpoints:
+- POST {OML_API_HOST}/api/v1/disposition/ — calificación BOT (salvo outcome=agenda)
+- POST {OML_API_HOST}/api/v1/webhook/voicebot/ — summary + voicebot_transfer_proceed
+
+Los campos de identificación del webhook van en el body JSON con el prefijo X-OML-*
+(nombre EXACTO). El webhook ignora X-OML-Disposition (compat); si no hay calificación
+previa, Django crea SYSTEM. Con agenda previa solo anexa summary (sin proceed).
 
 Este script recibe los argumentos desde variables de entorno AGI:
 - agi_arg_1: customer_id (requerido) - ID del contacto (X-OML-Contact-ID)
 - agi_arg_2: camp_id (requerido) - ID de la campaña OML (X-OML-Campaign-ID); debe ser el pk de la
   campaña a la que pertenece la OpcionCalificacion.
 - agi_arg_3: outcome (opcional) - True → GESTION_BOT; False → SCHEDULE_CALL_BOT;
-  MUDA_BOT (o muda) → MUDA_BOT; agenda → POST /api/v1/webhook/voicebot/ con
-  call_summary (anexa a AgendaContacto previa; el dialplan debe haber llamado
-  agenda.py antes)
+  MUDA_BOT (o muda) → MUDA_BOT; agenda → solo webhook con call_summary (anexa a
+  AgendaContacto previa; el dialplan debe haber llamado agenda.py antes)
 - agi_arg_4: url o callid (opcional) - Si contiene "://" es URL del webhook; si no, es call_id
   (X-OML-Call-ID). Permite llamar con (customer_id, camp_id, outcome, callid) sin especificar url.
 - agi_arg_5: token (opcional) - Token de autorización Bearer (si no se proporciona, se autentica)
@@ -36,8 +40,9 @@ Este script recibe los argumentos desde variables de entorno AGI:
 
 Variables de entorno:
 - OML_API_HOST: URL base de la API OML (requerido si no se proporciona token)
-- OML_USERNAME: Usuario para autenticación (opcional, puede venir de agi_arg_12)
-- OML_PASSWORD: Contraseña para autenticación (opcional, puede venir de agi_arg_13)
+- OML_USERNAME: Usuario agente voicebot (opcional, agi_arg_12). Debe tener agenteprofile:
+  POST /api/v1/disposition/ lo exige.
+- OML_PASSWORD: Contraseña (opcional, agi_arg_13)
 - OML_ID_EXTERNAL_SYSTEM: pk del sistema externo (opcional). Si camp_id (agi_arg_2) es el id_externo
   de la campaña, definir esta variable para el query idExternalSystem del GET de detalle de contacto.
 - OML_CONTACT_DETAIL_REQUIRED: si es "true"/"1"/"yes"/"on", un fallo al obtener el detalle del
@@ -47,19 +52,15 @@ Flujo (tras autenticación si aplica):
 1) GET /api/v1/campaign/{camp_id}/contacts/{customer_id}/ (Bearer) — logging AGI verbose.
    Si agi_arg_8 (call_summary) no viene, se arma un resumen QA con nombre/teléfono del contacto
    (texto distinto si outcome=agenda).
-2) GET /api/v1/campaign/{camp_id}/dispositionOptions/ — obtiene id de calificación BOT según outcome.
-3) POST al webhook voicebot (OML) con X-OML-Disposition, call_summary y el resto de campos.
-   Si outcome=agenda y ya existe AgendaContacto, Django solo anexa el summary (sin transfer ACD).
+2) Si outcome != agenda:
+   a) GET /api/v1/campaign/{camp_id}/dispositionOptions/ — id de opción *_BOT según outcome
+   b) POST /api/v1/disposition/ — califica el contacto (como el bot real)
+3) POST /api/v1/webhook/voicebot/ — call_summary (+ X-OML-Disposition opcional por compat).
+   Con agenda previa Django solo anexa summary (sin transfer ACD). Sin agenda publica
+   voicebot_transfer_proceed; el ACD solo continúa si hubo SIP REFER (waiter o TTL).
 
-La disposition (X-OML-Disposition) se obtiene automáticamente: se consulta la API
-GET /api/v1/campaign/{camp_id}/dispositionOptions/. Si agi_arg_3 (outcome) es True se usa el id de
-GESTION_BOT; si es False se usa el id de SCHEDULE_CALL_BOT. Si outcome es "agenda" también se
-usa GESTION_BOT (requerido por el API; Django no cambia la calificación Agenda ni publica
-voicebot_transfer_proceed cuando hay agenda previa). Si outcome no se pasa, se usa GESTION_BOT.
-
-El call_id (X-OML-Call-ID) es OBLIGATORIO para el endpoint voicebot: se persiste como callid de la
-calificación y, cuando la calificación aplicada es GESTION_BOT y no hay agenda previa, el backend
-publica el comando Redis Pub/Sub voicebot_transfer_proceed para proseguir la transferencia pendiente.
+El call_id (X-OML-Call-ID) es OBLIGATORIO para el webhook: identifica la llamada en el
+comando ACD y se usa como callid al crear la calificación BOT (y SYSTEM de fallback).
 
 Ejemplo de uso en extensions.conf (customer_id, camp_id, outcome opcional, callid como 4º arg).
 Si no se pasa agi_arg_8 el script genera un call_summary de emulador:
@@ -304,6 +305,57 @@ def get_bot_disposition_ids(
     return bot_dispositions
 
 
+def post_disposition(
+    customer_id: str,
+    disposition_id: str,
+    call_id: str,
+    token: str,
+    api_host: str,
+    verify_ssl: bool = False,
+    comments: str = "",
+) -> dict:
+    """
+    Califica el contacto vía POST /api/v1/disposition/ (flujo del bot real).
+
+    Body alineado a CalificacionClienteSerializer:
+      idContact, idDispositionOption, callid, comments
+
+    Requiere token de un usuario con agenteprofile.
+
+    Raises:
+        SystemExit: Si la petición falla
+    """
+    url = f"{api_host.rstrip('/')}/api/v1/disposition/"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "idContact": customer_id,
+        "idDispositionOption": disposition_id,
+        "callid": call_id,
+        "comments": comments or "",
+    }
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            json=body,
+            verify=verify_ssl,
+            timeout=30,
+        )
+        response.raise_for_status()
+        try:
+            return response.json()
+        except ValueError:
+            return {"status": "OK", "http_status": response.status_code}
+    except requests.exceptions.RequestException as e:
+        print(f"Error al calificar (POST disposition): {e}", file=sys.stderr)
+        if hasattr(e, "response") and e.response is not None and getattr(e.response, "text", None):
+            print(f"Respuesta del servidor: {e.response.text}", file=sys.stderr)
+        sys.exit(1)
+
+
 def fetch_contacto_detalle_oml(
     camp_id: str,
     contact_id: str,
@@ -380,8 +432,8 @@ def fetch_contacto_detalle_oml(
 def send_voicebot_webhook(
     customer_id: str,
     camp_id: str,
-    disposition: str,
     call_id: str,
+    disposition: Optional[str] = None,
     url: Optional[str] = None,
     token: Optional[str] = None,
     duration: Optional[int] = None,
@@ -398,13 +450,17 @@ def send_voicebot_webhook(
     work_type: Optional[str] = None
 ) -> dict:
     """
-    Envía el webhook genérico de voicebot de OML con los parámetros especificados.
+    Envía el webhook genérico de voicebot (summary + handoff).
+
+    El webhook ignora X-OML-Disposition: la calificación debe haberse hecho antes
+    vía POST /api/v1/disposition/. Disposition se envía solo por compatibilidad
+    si se pasa. El ACD decide el handoff tras voicebot_transfer_proceed.
 
     Args:
         customer_id: ID del contacto (X-OML-Contact-ID)
         camp_id: ID de la campaña OML (X-OML-Campaign-ID)
-        disposition: ID de la OpcionCalificacion (X-OML-Disposition)
         call_id: ID de la llamada en el ACD (X-OML-Call-ID), obligatorio
+        disposition: ID de OpcionCalificacion (X-OML-Disposition), opcional/compat
         url: URL del endpoint del webhook (si es None, se construye desde OML_API_HOST)
         token: Token de autorización Bearer
         duration: Duración de la llamada en segundos
@@ -419,7 +475,7 @@ def send_voicebot_webhook(
         issue: Issue en user_defined
         callback_slot: Callback slot en user_defined
         work_type: Tipo de trabajo en user_defined
-    
+
     Returns:
         Respuesta de la API como diccionario
     """
@@ -431,43 +487,44 @@ def send_voicebot_webhook(
             url = f"{api_host}/api/v1/webhook/voicebot/"
         else:
             url = "https://localhost/api/v1/webhook/voicebot/"
-    
+
     headers = {
         "Content-Type": "application/json",
     }
-    
+
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    
-    # Campos de identificación obligatorios del endpoint voicebot (X-OML-*, nombre exacto).
-    # El backend lee estos campos del body JSON y aplana el resto como observaciones.
+
+    # Campos de identificación obligatorios (X-OML-*, nombre exacto).
+    # Disposition es opcional: el webhook la ignora; se manda solo por compat.
     body = {
         "X-OML-Contact-ID": customer_id,
         "X-OML-Campaign-ID": camp_id,
         "X-OML-Call-ID": call_id,
-        "X-OML-Disposition": disposition,
     }
+    if disposition:
+        body["X-OML-Disposition"] = disposition
 
     if duration is not None:
         body["duration"] = duration
-    
+
     # Campos adicionales del formato nuevo
     if channel:
         body["channel"] = channel
-    
+
     if intent_detected:
         body["intent_detected"] = intent_detected
-    
+
     if phone:
         body["phone"] = phone
-    
+
     if trigger_type:
         body["trigger_type"] = trigger_type
-    
+
     # Construir el análisis con el formato del ejemplo
     if call_summary or sentiment or summary or issue or callback_slot or work_type:
         body["analysis"] = {}
-        
+
         # user_defined con todos los campos posibles
         user_defined = {}
         if call_summary:
@@ -478,16 +535,16 @@ def send_voicebot_webhook(
             user_defined["callback_slot"] = callback_slot
         if work_type:
             user_defined["work_type"] = work_type
-        
+
         if user_defined:
             body["analysis"]["user_defined"] = user_defined
-        
+
         if sentiment:
             body["analysis"]["sentiment"] = sentiment
-        
+
         if summary:
             body["analysis"]["summary"] = summary
-    
+
     try:
         response = requests.post(
             url,
@@ -590,22 +647,22 @@ def main():
     issue = agi.env.get('agi_arg_18')
     callback_slot = agi.env.get('agi_arg_19')
     work_type = agi.env.get('agi_arg_20')
-    
-    # API host para dispositionOptions (necesario para obtener id GESTION_BOT)
+
+    # API host (disposition + webhook requieren OML_API_HOST salvo URL/token explícitos)
     api_host = os.environ.get('OML_API_HOST')
     if api_host:
         api_host = normalize_api_host(api_host)
-    
+
     # Si no se proporciona token, autenticar primero
     if not token:
         if not api_host:
             agi.verbose("Error: OML_API_HOST no está definido y no se proporcionó token", 1)
             sys.exit(1)
-        
+
         if not username or not password:
             agi.verbose("Error: Se requiere username y password para autenticación (agi_arg_12/13 o OML_USERNAME/OML_PASSWORD)", 1)
             sys.exit(1)
-        
+
         agi.verbose(f"Autenticando en OML: {api_host}", 1)
         try:
             token = authenticate_oml(api_host, username, password, verify_ssl)
@@ -653,13 +710,13 @@ def main():
         agi.verbose("OML_API_HOST ausente: se omite GET detalle de contacto", 2)
 
     # Evaluar outcome (agi_arg_3): True → GESTION_BOT, False → SCHEDULE_CALL_BOT,
-    # MUDA_BOT/muda → MUDA_BOT, "agenda" → POST /webhook/voicebot/ con call_summary
-    # (anexa a AgendaContacto previa creada por agenda.py; sin transfer ACD).
+    # MUDA_BOT/muda → MUDA_BOT, "agenda" → solo webhook (summary a AgendaContacto previa).
     outcome_str = (agi.env.get('agi_arg_3') or "").strip().lower()
+    is_agenda = outcome_str == "agenda"
 
     if not call_summary:
         phone_for_summary = phone or agi.env.get("agi_callerid")
-        if outcome_str == "agenda":
+        if is_agenda:
             call_summary = build_default_agenda_call_summary(
                 contact_detail,
                 customer_id,
@@ -677,39 +734,64 @@ def main():
             )
         agi.verbose(f"call_summary generado por emulador: {call_summary}", 1)
 
-    if outcome_str == "agenda":
-        disposition_name = "GESTION_BOT"
+    disposition = None
+
+    if is_agenda:
         agi.verbose(
-            f"outcome=agenda: anexando summary a agenda previa "
+            f"outcome=agenda: solo webhook (summary a agenda previa) "
             f"contact={customer_id} camp={camp_id}",
             1,
         )
-    elif outcome_str in ("false", "0", "no", "off"):
-        disposition_name = "SCHEDULE_CALL_BOT"
-    elif outcome_str in ("muda", "muda_bot"):
-        disposition_name = "MUDA_BOT"
-    elif outcome_str.endswith("_bot") and outcome_str not in ("true", "1", "yes", "on", ""):
-        disposition_name = outcome_str.upper()
     else:
-        disposition_name = "GESTION_BOT"
+        if outcome_str in ("false", "0", "no", "off"):
+            disposition_name = "SCHEDULE_CALL_BOT"
+        elif outcome_str in ("muda", "muda_bot"):
+            disposition_name = "MUDA_BOT"
+        elif outcome_str.endswith("_bot") and outcome_str not in ("true", "1", "yes", "on", ""):
+            disposition_name = outcome_str.upper()
+        else:
+            disposition_name = "GESTION_BOT"
 
-    # Obtener opciones de calificación y usar el id según outcome
-    if not api_host:
-        agi.verbose("Error: OML_API_HOST es requerido para obtener las opciones de calificación (dispositionOptions)", 1)
-        sys.exit(1)
-    bot_dispositions = get_bot_disposition_ids(camp_id, token, api_host, verify_ssl)
-    disposition_id = bot_dispositions.get(disposition_name)
-    if disposition_id is None:
-        agi.verbose(f"Error: No se encontró la opción de calificación {disposition_name} en la campaña", 1)
-        sys.exit(1)
-    disposition = str(disposition_id)
+        # 2) Calificar como el bot real (dispositionOptions + POST disposition)
+        if not api_host:
+            agi.verbose(
+                "Error: OML_API_HOST es requerido para calificar vía dispositionOptions/disposition",
+                1,
+            )
+            sys.exit(1)
+        bot_dispositions = get_bot_disposition_ids(camp_id, token, api_host, verify_ssl)
+        disposition_id = bot_dispositions.get(disposition_name)
+        if disposition_id is None:
+            agi.verbose(
+                f"Error: No se encontró la opción de calificación {disposition_name} en la campaña",
+                1,
+            )
+            sys.exit(1)
+        disposition = str(disposition_id)
+        agi.verbose(
+            f"Calificando contacto={customer_id} con {disposition_name} id={disposition}",
+            1,
+        )
+        disp_result = post_disposition(
+            customer_id=customer_id,
+            disposition_id=disposition,
+            call_id=call_id,
+            token=token,
+            api_host=api_host,
+            verify_ssl=verify_ssl,
+            comments="PSTN emulator voicebot disposition",
+        )
+        agi.verbose(
+            f"Disposition OK: {json.dumps(disp_result, ensure_ascii=False)}",
+            1,
+        )
 
-    # La función send_voicebot_webhook construirá la URL desde OML_API_HOST si no se proporciona
+    # 3) Webhook: summary + handoff (Disposition opcional/compat; el webhook la ignora)
     result = send_voicebot_webhook(
         customer_id=customer_id,
         camp_id=camp_id,
-        disposition=disposition,
         call_id=call_id,
+        disposition=disposition,
         url=url,
         token=token,
         duration=duration,
@@ -725,7 +807,7 @@ def main():
         callback_slot=callback_slot,
         work_type=work_type
     )
-    
+
     # Enviar resultado a AGI verbose para logging
     agi.verbose(f"Webhook enviado exitosamente: {json.dumps(result, ensure_ascii=False)}", 1)
 
