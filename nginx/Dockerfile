@@ -1,7 +1,8 @@
 FROM nginx:stable-alpine3.17 as run
 
 # Instala el paquete fcgiwrap para soportar CGI en Nginx
-RUN apk add --no-cache fcgiwrap spawn-fcgi sipp postgresql-client
+# redis: redis-cli para reset de OML:CALLDATA / DISPOSITIONDATA (DB2) desde reset_tables_script.cgi
+RUN apk add --no-cache fcgiwrap spawn-fcgi sipp postgresql-client redis
 
 # Copia la configuración de Nginx y el script CGI
 COPY nginx.conf /etc/nginx/nginx.conf
