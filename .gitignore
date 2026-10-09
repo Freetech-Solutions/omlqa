@@ -1,3 +1,4 @@
 .env
 CLAUDE.md
 pstn_emulator/agi/__pycache__
+playwright/__pycache__
